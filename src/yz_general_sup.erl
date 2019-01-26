@@ -42,8 +42,8 @@ start_link() ->
 %%%===================================================================
 
 init([]) ->
-    %% Create yz_events ETS table
     yz_events:create_table(),
+    %% yz_cover:create_table(),
 
     SolrQ = {yz_solrq_sup,
              {yz_solrq_sup, start_link, []},
