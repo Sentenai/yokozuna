@@ -122,7 +122,7 @@ handle_call(get_ring_used, _, S) ->
 
 handle_call(Req, _, S) ->
     lager:warning("Unexpected request ~p", [Req]),
-    {noreply, S}.
+    {reply, unexpected_req, S}.
 
 code_change(_, S, _) ->
     {ok, S}.
