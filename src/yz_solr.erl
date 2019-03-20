@@ -278,10 +278,14 @@ prepare_json(Docs) ->
 -spec partition_list(index_name()) -> {ok, Resp::binary()} | {error, term()}.
 partition_list(Core) ->
     Params = [{q, "*:*"},
+              {rows, 0},
               {facet, "on"},
               {"facet.mincount", "1"},
+              {"facet.method", "enum"},
               {"facet.field", ?YZ_PN_FIELD_S},
-              {wt, "json"}],
+              {wt, "json"},
+              {omitHeader, "on"}
+             ],
     Encoded = mochiweb_util:urlencode(Params),
     URL = ?FMT("~s/~s/select?~s", [base_url(), Core, Encoded]),
     Opts = [{response_format, binary}],
