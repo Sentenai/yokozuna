@@ -21,19 +21,30 @@
 %%      coverage information for distributed search queries.
 
 -module(yz_cover).
--compile(export_all).
 -behavior(gen_server).
 -export([code_change/3,
          handle_call/3,
          handle_cast/2,
          handle_info/2,
          init/1,
+         start_link/0,
          terminate/2]).
+
+-export([create_table/0,
+         get_ring_used/0,
+         logical_index/1,
+         logical_partition/2,
+         logical_partitions/2,
+         plan/1,
+         reify_partitions/2]).
+
 -include("yokozuna.hrl").
+
+-define(ETS, ets_yz_cover).
 
 -record(state, {
           %% The ring used to calculate the current cached plan.
-          ring_used :: ring()
+          ring_used :: ring() | 'undefined'
          }).
 
 %%%===================================================================
@@ -63,9 +74,9 @@ logical_partitions(Ring, Partitions) ->
 -spec plan(index_name()) -> {ok, plan()} | {error, term()}.
 plan(Index) ->
     NVal = yz_index:get_n_val_from_index(Index),
-    case mochiglobal:get(?INT_TO_ATOM(NVal), undefined) of
-        undefined -> calc_plan(NVal, yz_misc:get_ring(transformed));
-        Plan -> Plan
+    case ets:lookup(?ETS, NVal) of
+        [{NVal, Plan}] -> {ok, Plan};
+        [] -> calc_plan(NVal, yz_misc:get_ring(transformed))
     end.
 
 -spec reify_partitions(ring(), ordset(lp())) -> ordset(p()).
@@ -81,6 +92,7 @@ start_link() ->
 %%%===================================================================
 
 init([]) ->
+    create_table(),
     schedule_tick(),
     add_node_watcher_callback(),
     {ok, #state{ring_used=undefined}}.
@@ -96,6 +108,10 @@ handle_info(tick, S) ->
     schedule_tick(),
     {noreply, S#state{ring_used=Ring}};
 
+handle_info(invalidate_plans, S) ->
+    invalidate_plans(),
+    {noreply, S};
+
 handle_info(Req, S) ->
     lager:warning("Unexpected request ~p", [Req]),
     {noreply, S}.
@@ -103,9 +119,10 @@ handle_info(Req, S) ->
 handle_call(get_ring_used, _, S) ->
     Ring = S#state.ring_used,
     {reply, Ring, S};
+
 handle_call(Req, _, S) ->
     lager:warning("Unexpected request ~p", [Req]),
-    {noreply, S}.
+    {reply, unexpected_req, S}.
 
 code_change(_, S, _) ->
     {ok, S}.
@@ -116,6 +133,11 @@ terminate(_, _) ->
 %%%===================================================================
 %%% Private
 %%%===================================================================
+
+create_table() ->
+    ets:new(?ETS, [named_table, protected, set,
+                   {read_concurrency,true}
+                  ]).
 
 %% @doc Create a covering set using logical partitions and add
 %%      filtering information to eliminate overlap.
@@ -134,9 +156,9 @@ add_filtering(N, Q, LPI, PS) ->
 cache_plan(NVal, Ring) ->
     case calc_plan(NVal, Ring) of
         {error, _} ->
-            mochiglobal:put(?INT_TO_ATOM(NVal), undefined);
+            ets:delete(?ETS, NVal);
         {ok, Plan} ->
-            mochiglobal:put(?INT_TO_ATOM(NVal), {ok, Plan})
+            ets:insert(?ETS, {NVal, Plan})
     end,
     ok.
 
@@ -302,14 +324,15 @@ get_index_nvals() ->
 
 invalidate_plans() ->
     NVals = get_index_nvals(),
-    _ = [mochiglobal:put(?INT_TO_ATOM(NVal), undefined) || NVal <- NVals].
+    [ets:delete(?ETS, NVal) || NVal <- NVals].
 
 add_node_watcher_callback() ->
     riak_core_node_watcher_events:add_guarded_callback(
         fun(Changes) ->
             case lists:member(?YZ_APP_NAME, Changes) of
                 true ->
-                    invalidate_plans();
+                    ?MODULE ! invalidate_plans;
                 false -> ok
             end
         end).
+
